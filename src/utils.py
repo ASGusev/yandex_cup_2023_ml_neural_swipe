@@ -88,9 +88,14 @@ class NBestCollector:
 
 class Vocabulary:
     def __init__(self, words: Iterable[tuple[str, int]]):
+        self.words = words
         self.word_lists = defaultdict(list)
+        self.word_codes = {}
+        self.word_counts = {}
         for i, (w, c) in enumerate(words):
             self.word_lists[w[0]].append((w, i, c))
+            self.word_codes[w] = i
+            self.word_counts[w] = c
         for wl in self.word_lists.values():
             wl.sort()
 
