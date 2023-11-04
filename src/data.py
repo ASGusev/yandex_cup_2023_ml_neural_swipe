@@ -1,4 +1,5 @@
 import csv
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Iterable
 
@@ -37,9 +38,15 @@ def save_results(path: Path, results: Iterable[tuple[str, str, str, str]]):
 
 
 class Dataset:
-    def __init__(self, traces: Iterable[np.ndarray], words: Iterable[str]):
+    def __init__(self, traces: Sequence[np.ndarray], words: list[str]):
         self.traces = traces
         self.words = words
+
+    def __getitem__(self, index: int) -> utils.Sample:
+        return utils.Sample(self.traces[index], self.words[index])
+
+    def __len__(self):
+        return len(self.traces)
 
     def __iter__(self):
         for t, w in zip(self.traces, self.words):
