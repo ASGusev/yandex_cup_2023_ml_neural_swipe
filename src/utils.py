@@ -87,8 +87,8 @@ class NBestCollector:
 
 
 class Vocabulary:
-    def __init__(self, words: Iterable[tuple[str, int]]):
-        self.words = words
+    def __init__(self, words: list[tuple[str, int]]):
+        self.words = [w for w, _ in words]
         self.word_lists = defaultdict(list)
         self.word_codes = {}
         self.word_counts = {}
@@ -142,3 +142,8 @@ def interpolate_line(points: np.ndarray, step: float = 1.) -> np.ndarray:
             ans.append(prev_p + weights * (next_p - prev_p))
         ans.append([next_p])
     return np.concatenate(ans)
+
+
+def cycle(iterable: Iterable) -> Iterable:
+    while True:
+        yield from iterable
