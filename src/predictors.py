@@ -15,7 +15,7 @@ class FirstLetterCandidateGenerator:
         grid = self.keyboard_grids[trace.grid_name]
         first_letter = grid.resolve_letter(*trace.coordinates[0])
         candidate_words = self.vocabulary.get_by_first_letter(first_letter)
-        return [utils.Candidate(cw, grid.make_curve(cw)) for cw, _ in candidate_words]
+        return [utils.Candidate(cw, grid.make_curve(cw)) for cw, _, _ in candidate_words]
 
 
 class FirstLetterLengthCandidateGenerator:
@@ -37,7 +37,7 @@ class FirstLetterLengthCandidateGenerator:
         max_trace_len = max(trace_len * self.max_share, self.min_max_len)
         close_candidates = [
             cw
-            for cw, _ in candidate_words
+            for cw, _, _ in candidate_words
             if min_trace_len <= utils.trace_len(grid.make_curve(cw)) <= max_trace_len
         ]
         while len(close_candidates) < 4:

@@ -89,12 +89,12 @@ class NBestCollector:
 class Vocabulary:
     def __init__(self, words: Iterable[tuple[str, int]]):
         self.word_lists = defaultdict(list)
-        for w, c in words:
-            self.word_lists[w[0]].append((w, c))
+        for i, (w, c) in enumerate(words):
+            self.word_lists[w[0]].append((w, i, c))
         for wl in self.word_lists.values():
             wl.sort()
 
-    def get_by_first_letter(self, c: str) -> list[str]:
+    def get_by_first_letter(self, c: str) -> list[tuple[str, int, int]]:
         return self.word_lists[c]
 
     @staticmethod
@@ -107,7 +107,7 @@ class Vocabulary:
                 data.append((word, counter))
         return Vocabulary(data)
 
-    def __iter__(self) -> Iterable[str]:
+    def __iter__(self) -> Iterable[tuple[str, int, int]]:
         for _, wl in sorted(self.word_lists.items()):
             yield from wl
 
