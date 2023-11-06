@@ -1,6 +1,8 @@
 import random
-from typing import Callable
+from typing import Callable, Iterable
 
+import numpy as np
+import pandas as pd
 from tslearn.metrics import dtw
 
 import utils
@@ -16,6 +18,21 @@ class FirstLetterCandidateGenerator:
         first_letter = grid.resolve_letter(*trace.coordinates[0])
         candidate_words = self.vocabulary.get_by_first_letter(first_letter)
         return [utils.Candidate(cw, grid.make_curve(cw)) for cw, _, _ in candidate_words]
+
+
+class TopCandidateGenerator:
+    def __init__(self, vocabulary: utils.Vocabulary, keyboard_grids: dict[str, utils.KeyboardGrid], n: int):
+        self.vocabulary = vocabulary
+        self.keyboard_grids = keyboard_grids
+        words = sorted(vocabulary, key=lambda wt: -wt[2])
+        words = [w for w, _, _ in words[:n]]
+        self.candidates = {
+            gn: [utils.Candidate(w, g.make_curve(w)) for w in words]
+            for gn, g in keyboard_grids.items()
+        }
+
+    def __call__(self, trace: utils.Trace) -> list[utils.Candidate]:
+        return self.candidates[trace.grid_name]
 
 
 class FirstLetterLengthCandidateGenerator:
@@ -67,6 +84,20 @@ class InterpolatedDTWRanker:
         return collector.values
 
 
+class ScoringRanker:
+    def __init__(self, scorer: Callable, feature_extractor: Callable):
+        self.scorer = scorer
+        self.feature_extractor = feature_extractor
+
+    def __call__(self, sample_trace: utils.Trace, candidates: list[utils.Candidate]) -> utils.Suggestion:
+        features = self.feature_extractor(sample_trace, candidates)
+        scores = self.scorer(features)
+        return tuple(
+            candidates[i].word
+            for i in scores.argsort()[:4]
+        )
+
+
 class Predictor:
     def __init__(
             self,
@@ -79,3 +110,60 @@ class Predictor:
     def __call__(self, sample_trace: utils.Trace) -> utils.Suggestion:
         candidates = self.candidate_generator(sample_trace)
         return self.ranker(sample_trace, candidates)
+
+
+class PopularityCalculator:
+    def __init__(self, vocabulary: utils.Vocabulary):
+        self.vocabulary = vocabulary
+
+    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
+        return np.array([self.vocabulary.word_counts[c.word] for c in candidates])
+
+
+class InterpolatedDTWCalculator:
+    def __init__(self, step: float):
+        self.step = step
+
+    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
+        interpolated_target = utils.interpolate_line(trace.coordinates, self.step)
+        return np.array([
+            dtw(utils.interpolate_line(c.coordinates, self.step), interpolated_target)
+            for c in candidates
+        ])
+
+
+def target_trace_length(trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
+    return np.full(len(candidates), utils.trace_len(trace.coordinates))
+
+
+def candidate_trace_length(_: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
+    return np.array([utils.trace_len(c.coordinates) for c in candidates])
+
+
+class FeaturesExtractor:
+    def __init__(self, feature_calculators: dict[str, Callable[[utils.Trace, list[utils.Candidate]], np.ndarray]]):
+        self.feature_calculators = feature_calculators
+
+    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> pd.DataFrame:
+        return pd.DataFrame({
+            fn: fc(trace, candidates)
+            for fn, fc in self.feature_calculators.items()
+        })
+
+
+def make_scorer_ds(
+        original_dataset: Iterable[utils.Sample],
+        candidate_generator: Callable[[utils.Trace], list[utils.Candidate]],
+        features_extractor: FeaturesExtractor,
+        keyboard_grids: dict[str, utils.KeyboardGrid],
+) -> tuple[pd.DataFrame, np.ndarray]:
+    features, targets = [], []
+    for dp in original_dataset:
+        candidates = candidate_generator(dp.trace)
+        negative_candidate = random.choice(candidates)
+        positive_candidate = utils.Candidate(dp.word, keyboard_grids[dp.trace.grid_name].make_curve(dp.word))
+        features.append(features_extractor(dp.trace, [positive_candidate, negative_candidate]))
+        targets.extend([1, 0])
+    features = pd.concat(features).reset_index(drop=True)
+    targets = np.array(targets)
+    return features, targets

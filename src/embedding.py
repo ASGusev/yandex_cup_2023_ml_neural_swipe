@@ -320,10 +320,12 @@ class EmbeddingCandidateGenerator:
             grid_vectors: dict[str, np.ndarray],
             preprocessor: TracePreprocessor,
             vocabulary: utils.Vocabulary,
+            keyboard_grids: dict[str, utils.KeyboardGrid],
             n_candidates: int,
             dim: int = 32,
             min_freq: int = 0,
     ):
+        self.keyboard_grids = keyboard_grids
         self.n_candidates = n_candidates
         self.vocabulary = vocabulary
         self.preprocessor = preprocessor
@@ -348,6 +350,28 @@ class EmbeddingCandidateGenerator:
             embedding = self.model(batch)[0].cpu().numpy()
         word_indexes, dists = self.grid_indexes[trace.grid_name].query(embedding, self.n_candidates)
         return [
-            utils.Candidate(w := self.vocabulary.words[wi], self.preprocessor.preprocess_proj(w, trace.grid_name))
+            utils.Candidate(w := self.vocabulary.words[wi], self.keyboard_grids[trace.grid_name].make_curve(w))
             for wi in word_indexes
         ]
+
+
+class EmbeddingDistCalculator:
+    def __init__(
+            self,
+            preprocessor: TracePreprocessor,
+            model: Embedder,
+            vocabulary_embeddings: dict[str, np.ndarray],
+            vocabulary: utils.Vocabulary,
+    ):
+        self.model = model
+        self.vocabulary_embeddings = vocabulary_embeddings
+        self.vocabulary = vocabulary
+        self.preprocessor = preprocessor
+
+    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
+        trace_x = self.preprocessor.preprocess_real(trace)
+        with torch.no_grad():
+            trace_embedding = self.model(self.preprocessor.merge_batch([trace_x])).cpu().numpy()
+        word_indices = np.array([self.vocabulary.word_codes[c.word] for c in candidates])
+        word_embeddings = self.vocabulary_embeddings[trace.grid_name][word_indices]
+        return np.linalg.norm(word_embeddings - trace_embedding, axis=1)
