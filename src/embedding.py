@@ -343,15 +343,25 @@ class EmbeddingCandidateGenerator:
         for gn, vs in grid_vectors.items():
             self.grid_indexes[gn].add_items(vs[rel_indexes], rel_indexes)
 
-    def __call__(self, trace: utils.Trace) -> list[utils.Candidate]:
-        curve = self.preprocessor.preprocess_real(trace)
-        batch = self.preprocessor.merge_batch([curve])
+    def __call__(self, traces: list[utils.Trace]) -> list[list[utils.Candidate]]:
+        prep_curves = list(map(self.preprocessor.preprocess_real, traces))
+        batch = self.preprocessor.merge_batch(prep_curves)
         with torch.no_grad():
-            embedding = self.model(batch)[0].cpu().numpy()
-        word_indexes, dists = self.grid_indexes[trace.grid_name].query(embedding, self.n_candidates)
+            embeddings = self.model(batch).cpu().numpy()
+        word_indexes = np.ndarray((len(traces), self.n_candidates), np.int32)
+        extra_grid_mask = np.array([utils.GRID_NAMES.index(t.grid_name) for t in traces], bool)
+        if extra_grid_mask.any():
+            word_indexes[extra_grid_mask], _ = self.grid_indexes['extra'] \
+                .query(embeddings[extra_grid_mask], self.n_candidates)
+        if not extra_grid_mask.all():
+            word_indexes[~extra_grid_mask], _ = self.grid_indexes['default'] \
+                .query(embeddings[~extra_grid_mask], self.n_candidates)
         return [
-            utils.Candidate(w := self.vocabulary.words[wi], self.keyboard_grids[trace.grid_name].make_curve(w))
-            for wi in word_indexes
+            [
+                utils.Candidate(w := self.vocabulary.words[wi], self.keyboard_grids[trace.grid_name].make_curve(w))
+                for wi in wis
+            ]
+            for trace, wis in zip(traces, word_indexes)
         ]
 
 
@@ -368,10 +378,18 @@ class EmbeddingDistCalculator:
         self.vocabulary = vocabulary
         self.preprocessor = preprocessor
 
-    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
-        trace_x = self.preprocessor.preprocess_real(trace)
+    def __call__(self, traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
+        batch = self.preprocessor.merge_batch(list(map(self.preprocessor.preprocess_real, traces)))
         with torch.no_grad():
-            trace_embedding = self.model(self.preprocessor.merge_batch([trace_x])).cpu().numpy()
-        word_indices = np.array([self.vocabulary.word_codes[c.word] for c in candidates])
-        word_embeddings = self.vocabulary_embeddings[trace.grid_name][word_indices]
-        return np.linalg.norm(word_embeddings - trace_embedding, axis=1)
+            trace_embeddings = self.model(batch)
+            word_indices = np.array([
+                [self.vocabulary.word_codes[c.word] for c in cs]
+                for cs in candidates
+            ])
+            word_embeddings = np.array([
+                self.vocabulary_embeddings[t.grid_name][wis]
+                for t, wis in zip(traces, word_indices)
+            ])
+            trace_embeddings = trace_embeddings.cpu().numpy()
+            dists = np.linalg.norm(word_embeddings - np.expand_dims(trace_embeddings, 1), axis=2)
+        return dists

@@ -1,3 +1,4 @@
+import itertools
 import random
 from typing import Callable, Iterable
 
@@ -13,6 +14,7 @@ class FirstLetterCandidateGenerator:
         self.vocabulary = vocabulary
         self.keyboard_grids = keyboard_grids
 
+    @utils.apply_to_batch
     def __call__(self, trace: utils.Trace) -> list[utils.Candidate]:
         grid = self.keyboard_grids[trace.grid_name]
         first_letter = grid.resolve_letter(*trace.coordinates[0])
@@ -31,8 +33,8 @@ class TopCandidateGenerator:
             for gn, g in keyboard_grids.items()
         }
 
-    def __call__(self, trace: utils.Trace) -> list[utils.Candidate]:
-        return self.candidates[trace.grid_name]
+    def __call__(self, trace: utils.Trace) -> list[list[utils.Candidate]]:
+        return [self.candidates[trace.grid_name] for _ in trace]
 
 
 class FirstLetterLengthCandidateGenerator:
@@ -45,6 +47,7 @@ class FirstLetterLengthCandidateGenerator:
         self.max_share = max_share
         self.min_max_len = min_max_len
 
+    @utils.apply_to_batch
     def __call__(self, trace: utils.Trace) -> list[utils.Candidate]:
         grid = self.keyboard_grids[trace.grid_name]
         first_letter = grid.resolve_letter(*trace.coordinates[0])
@@ -84,38 +87,30 @@ class InterpolatedDTWRanker:
         return collector.values
 
 
-class ScoringRanker:
-    def __init__(self, scorer: Callable, feature_extractor: Callable):
-        self.scorer = scorer
-        self.feature_extractor = feature_extractor
-
-    def __call__(self, sample_trace: utils.Trace, candidates: list[utils.Candidate]) -> utils.Suggestion:
-        features = self.feature_extractor(sample_trace, candidates)
-        scores = self.scorer(features)
-        return tuple(
-            candidates[i].word
-            for i in scores.argsort()[:4]
-        )
-
-
 class Predictor:
     def __init__(
             self,
-            candidate_generator: Callable[[utils.Trace], list[utils.Candidate]],
-            ranker: Callable[[utils.Trace, list[utils.Candidate]], utils.Suggestion],
+            candidate_generator: Callable[[list[utils.Trace]], list[list[utils.Candidate]]],
+            ranker: Callable[[list[utils.Trace], list[list[utils.Candidate]]], list[utils.Suggestion]],
+            batch_size: int = 500,
     ):
         self.candidate_generator = candidate_generator
         self.ranker = ranker
+        self.batch_size = batch_size
 
-    def __call__(self, sample_trace: utils.Trace) -> utils.Suggestion:
-        candidates = self.candidate_generator(sample_trace)
-        return self.ranker(sample_trace, candidates)
+    def __call__(self, sample_traces: Iterable[utils.Trace]) -> list[utils.Suggestion]:
+        res = []
+        for batch in utils.batch_iterable(sample_traces, self.batch_size):
+            candidates = self.candidate_generator(batch)
+            res.extend(self.ranker(batch, candidates))
+        return res
 
 
 class PopularityCalculator:
     def __init__(self, vocabulary: utils.Vocabulary):
         self.vocabulary = vocabulary
 
+    @utils.apply_to_batch
     def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
         return np.array([self.vocabulary.word_counts[c.word] for c in candidates])
 
@@ -124,6 +119,7 @@ class InterpolatedDTWCalculator:
     def __init__(self, step: float):
         self.step = step
 
+    @utils.apply_to_batch
     def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
         interpolated_target = utils.interpolate_line(trace.coordinates, self.step)
         return np.array([
@@ -132,38 +128,68 @@ class InterpolatedDTWCalculator:
         ])
 
 
+@utils.apply_to_batch
 def target_trace_length(trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
     return np.full(len(candidates), utils.trace_len(trace.coordinates))
 
 
+@utils.apply_to_batch
 def candidate_trace_length(_: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
     return np.array([utils.trace_len(c.coordinates) for c in candidates])
 
 
 class FeaturesExtractor:
-    def __init__(self, feature_calculators: dict[str, Callable[[utils.Trace, list[utils.Candidate]], np.ndarray]]):
+    def __init__(
+            self,
+            feature_calculators: dict[str, Callable[[list[utils.Trace], list[list[utils.Candidate]]], np.ndarray]],
+    ):
         self.feature_calculators = feature_calculators
 
-    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> pd.DataFrame:
+    def __call__(self, traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> pd.DataFrame:
         return pd.DataFrame({
-            fn: fc(trace, candidates)
+            fn: list(itertools.chain.from_iterable(fc(traces, candidates)))
             for fn, fc in self.feature_calculators.items()
         })
 
 
+class ScoringRanker:
+    def __init__(self, scorer: Callable, feature_extractor: FeaturesExtractor):
+        self.scorer = scorer
+        self.feature_extractor = feature_extractor
+
+    def __call__(self, sample_traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> list[utils.Suggestion]:
+        res = []
+        features = self.feature_extractor(sample_traces, candidates)
+        scores = self.scorer(features)
+        for ss, cs in zip(utils.batch_iterable(scores, len(features) // len(candidates)), candidates):
+            res.append(tuple(
+                cs[i].word
+                for i in np.array(ss).argsort()[:4]
+            ))
+        return res
+
+
 def make_scorer_ds(
         original_dataset: Iterable[utils.Sample],
-        candidate_generator: Callable[[utils.Trace], list[utils.Candidate]],
+        candidate_generator: Callable[[list[utils.Trace]], list[list[utils.Candidate]]],
         features_extractor: FeaturesExtractor,
         keyboard_grids: dict[str, utils.KeyboardGrid],
+        batch_size: int = 100,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     features, targets = [], []
-    for dp in original_dataset:
-        candidates = candidate_generator(dp.trace)
-        negative_candidate = random.choice(candidates)
-        positive_candidate = utils.Candidate(dp.word, keyboard_grids[dp.trace.grid_name].make_curve(dp.word))
-        features.append(features_extractor(dp.trace, [positive_candidate, negative_candidate]))
-        targets.extend([1, 0])
+    for batch in utils.batch_iterable(original_dataset, batch_size):
+        candidates = candidate_generator([dp.trace for dp in batch])
+        negative_candidates = [random.choice(cs) for cs in candidates]
+        positive_candidates = [
+            utils.Candidate(dp.word, keyboard_grids[dp.trace.grid_name].make_curve(dp.word))
+            for dp in batch
+        ]
+        features.append(features_extractor(
+            [dp.trace for dp in batch],
+            list(map(list, zip(positive_candidates, negative_candidates))),
+        ))
+        for _ in batch:
+            targets.extend([1, 0])
     features = pd.concat(features).reset_index(drop=True)
     targets = np.array(targets)
     return features, targets

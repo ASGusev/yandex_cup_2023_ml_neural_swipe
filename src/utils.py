@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable
 from collections import namedtuple
 
 import numpy as np
@@ -138,7 +138,7 @@ def interpolate_line(points: np.ndarray, step: float = 1.) -> np.ndarray:
         step_vector = next_p - prev_p
         step_len = np.sum(step_vector ** 2) ** .5
         if step_len > step:
-            weights = np.linspace(0, 1, int(step_len // step + 2))[1:-1].reshape((-1, 1))
+            weights = np.linspace(0, 1, int(step_len // step + 2))[1:-1].reshape((-1, 1)).astype(np.float32)
             ans.append(prev_p + weights * (next_p - prev_p))
         ans.append([next_p])
     return np.concatenate(ans)
@@ -147,3 +147,24 @@ def interpolate_line(points: np.ndarray, step: float = 1.) -> np.ndarray:
 def cycle(iterable: Iterable) -> Iterable:
     while True:
         yield from iterable
+
+
+def apply_to_batch(func: Callable) -> Callable:
+    def wrapper(*samples: list) -> list:
+        if isinstance(samples[0], list):
+            return [func(*i) for i in zip(*samples)]
+        else:
+            instance, *args = samples
+            return [func(instance, *i) for i in zip(*args)]
+    return wrapper
+
+
+def batch_iterable(iterable: Iterable, batch_size: int) -> Iterable[list]:
+    collector = []
+    for i in iterable:
+        collector.append(i)
+        if len(collector) == batch_size:
+            yield collector
+            collector = []
+    if collector:
+        yield collector
