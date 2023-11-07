@@ -3,11 +3,12 @@ import itertools
 import math
 import random
 from collections import defaultdict
-from typing import Iterable, Callable, Iterator
+from typing import Iterable, Callable, Iterator, Optional
 
 import numpy as np
 import torch
 import voyager
+from pathlib import Path
 from torch import nn
 from tqdm.auto import tqdm, trange
 
@@ -254,8 +255,10 @@ def train(
         batches_per_epoch: int, n_epochs: int,
         loss_function: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         penalty_function: Callable[[torch.Tensor], torch.Tensor], penalty_weight: float = 0.,
+        saving_path: Optional[Path] = None,
 ):
     train_iterator = utils.cycle(train_data)
+    best_val_loss = float('inf')
     for epoch in range(1, n_epochs + 1):
         train_losses, val_losses = [], []
         train_penalties, val_penalties = [], []
@@ -287,6 +290,10 @@ def train(
         print(f'Epoch {epoch} train loss: {train_loss:.3f} train penalty: {train_penalty:.3f} val loss: {val_loss:.3f}')
         if scheduler:
             scheduler.step()
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            if saving_path:
+                torch.save(model.state_dict(), saving_path)
 
 
 def calculate_word_embeddings(
