@@ -1,4 +1,5 @@
 import itertools
+import multiprocessing
 import random
 from typing import Callable, Iterable
 
@@ -115,17 +116,28 @@ class PopularityCalculator:
         return np.array([self.vocabulary.word_counts[c.word] for c in candidates])
 
 
+def _calc_task_interpolated_dtw(trace: utils.Trace, candidates: list[utils.Candidate], step: int) -> np.ndarray:
+    interpolated_target = utils.interpolate_line(trace.coordinates, step)
+    return np.array([
+        dtw(utils.interpolate_line(c.coordinates, step), interpolated_target)
+        for c in candidates
+    ])
+
+
 class InterpolatedDTWCalculator:
+    chunk_size = 4
+
     def __init__(self, step: float):
         self.step = step
 
-    @utils.apply_to_batch
-    def __call__(self, trace: utils.Trace, candidates: list[utils.Candidate]) -> np.ndarray:
-        interpolated_target = utils.interpolate_line(trace.coordinates, self.step)
-        return np.array([
-            dtw(utils.interpolate_line(c.coordinates, self.step), interpolated_target)
-            for c in candidates
-        ])
+    def __call__(self, traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
+        args_gen = ((t, c, self.step) for t, c in zip(traces, candidates))
+        if len(traces) >= 2 * self.chunk_size:
+            with multiprocessing.Pool() as pool:
+                dists = pool.starmap(_calc_task_interpolated_dtw, args_gen, self.chunk_size)
+        else:
+            dists = list(itertools.starmap(_calc_task_interpolated_dtw, args_gen))
+        return np.array(dists)
 
 
 @utils.apply_to_batch
