@@ -25,19 +25,22 @@ Suggestion = tuple[str, str, str, str]
 
 class KeyboardGrid:
     def __init__(self, key_configs: list[dict]):
-        self.x0s = np.zeros(32, np.int16)
-        self.x1s = np.zeros(32, np.int16)
-        self.y0s = np.zeros(32, np.int16)
-        self.y1s = np.zeros(32, np.int16)
-        self.valid_keys = set()
+        self.x0s = np.zeros(34, np.int16)
+        self.x1s = np.zeros(34, np.int16)
+        self.y0s = np.zeros(34, np.int16)
+        self.y1s = np.zeros(34, np.int16)
+        self.letter_codes = {
+            'ё': ord('е') - A_ORD,
+            'ъ': ord('ь') - A_ORD,
+        }
         self.key_order = []
         for kc in key_configs:
             if 'label' not in kc:
                 continue
             char_index = ord(kc['label']) - A_ORD
-            if char_index < 0 or char_index >= 32:
+            if char_index < 0 or char_index >= 34:
                 continue
-            self.valid_keys.add(kc['label'])
+            self.letter_codes[kc['label']] = char_index
             self.key_order.append(char_index)
             self.x0s[char_index] = kc['hitbox']['x']
             self.x1s[char_index] = kc['hitbox']['x'] + kc['hitbox']['w']
@@ -58,7 +61,7 @@ class KeyboardGrid:
         return ALPHABET[char_index]
 
     def make_curve(self, word: str) -> np.ndarray:
-        char_codes = [ord(c) - A_ORD for c in word if c in self.valid_keys]
+        char_codes = [cc for c in word if (cc := self.letter_codes.get(c, -1)) != -1]
         return self.key_centers[char_codes]
 
 
