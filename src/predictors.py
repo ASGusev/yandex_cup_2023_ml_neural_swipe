@@ -162,6 +162,20 @@ def candidate_trace_length(_: list[utils.Trace], candidates: list[list[utils.Can
     ])
 
 
+def trace_length_ratio(traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
+    return np.stack([
+        np.array([utils.trace_len(c.coordinates) for c in cs]) / np.maximum(utils.trace_len(t.coordinates), 1)
+        for t, cs in zip(traces, candidates)
+    ])
+
+
+def trace_length_diff(traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
+    return np.stack([
+        np.array([utils.trace_len(c.coordinates) for c in cs]) - utils.trace_len(t.coordinates)
+        for t, cs in zip(traces, candidates)
+    ])
+
+
 class FeaturesExtractor:
     def __init__(
             self,
