@@ -186,12 +186,13 @@ def make_scorer_ds(
         candidate_generator: Callable[[list[utils.Trace]], list[list[utils.Candidate]]],
         features_extractor: FeaturesExtractor,
         keyboard_grids: dict[str, utils.KeyboardGrid],
+        sampler: Callable[[list[utils.Candidate]], utils.Candidate] = random.choice,
         batch_size: int = 100,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     features, targets = [], []
     for batch in utils.batch_iterable(original_dataset, batch_size):
         candidates = candidate_generator([dp.trace for dp in batch])
-        negative_candidates = [random.choice(cs) for cs in candidates]
+        negative_candidates = [sampler(cs) for cs in candidates]
         positive_candidates = [
             utils.Candidate(dp.word, keyboard_grids[dp.trace.grid_name].make_curve(dp.word))
             for dp in batch
@@ -205,3 +206,12 @@ def make_scorer_ds(
     features = pd.concat(features).reset_index(drop=True)
     targets = np.array(targets)
     return features, targets
+
+
+class ExpSampler:
+    def __init__(self, lam: float):
+        self.lam = lam
+
+    def __call__(self, options: list):
+        index = int(random.expovariate(self.lam)) % len(options)
+        return options[index]
