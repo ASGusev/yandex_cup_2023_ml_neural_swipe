@@ -34,8 +34,8 @@ class TopCandidateGenerator:
             for gn, g in keyboard_grids.items()
         }
 
-    def __call__(self, trace: utils.Trace) -> list[list[utils.Candidate]]:
-        return [self.candidates[trace.grid_name] for _ in trace]
+    def __call__(self, traces: list[utils.Trace]) -> list[list[utils.Candidate]]:
+        return [self.candidates[t.grid_name] for t in traces]
 
 
 class FirstLetterLengthCandidateGenerator:
