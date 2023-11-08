@@ -141,6 +141,13 @@ class InterpolatedDTWCalculator:
         return np.array(dists)
 
 
+def keyboard_grid(traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
+    return np.stack([
+        np.full(len(cs), utils.GRID_NAMES.index(t.grid_name), np.float32)
+        for t, cs in zip(traces, candidates)
+    ])
+
+
 def target_trace_length(traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
     return np.stack([
         np.full(len(cs), utils.trace_len(t.coordinates))
