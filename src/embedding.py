@@ -186,7 +186,7 @@ class Embedder(nn.Module):
 
 
 class LSTMEmbedder(Embedder):
-    def __init__(self, in_dim: int = 5, out_dim: int = 32, n_layers: int = 4):
+    def __init__(self, in_dim: int = 5, out_dim: int = 64, n_layers: int = 4):
         super().__init__()
         self.rnn = nn.LSTM(in_dim, out_dim, n_layers, batch_first=True)
 
