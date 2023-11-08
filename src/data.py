@@ -42,7 +42,9 @@ class Dataset:
         self.traces = traces
         self.words = words
 
-    def __getitem__(self, index: int) -> utils.Sample:
+    def __getitem__(self, index: int | slice) -> utils.Sample | list[utils.Sample]:
+        if isinstance(index, slice):
+            return [self[i] for i in range(index.start or 0, index.stop, index.step or 1)]
         return utils.Sample(self.traces[index], self.words[index])
 
     def __len__(self):
@@ -61,7 +63,9 @@ class BinaryDataset:
         self.coordinates_end_indexes = lens.cumsum()
         self.coordinates_start_indexes = self.coordinates_end_indexes - lens
 
-    def __getitem__(self, index: int) -> utils.Trace:
+    def __getitem__(self, index: int | slice) -> utils.Trace | list[utils.Trace]:
+        if isinstance(index, slice):
+            return [self[i] for i in range(index.start or 0, index.stop, index.step or 1)]
         coordinates_start_index = self.coordinates_start_indexes[index]
         coordinates_end_index = self.coordinates_end_indexes[index]
         return utils.Trace(
