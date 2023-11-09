@@ -200,10 +200,10 @@ class FeaturesExtractorNP:
     def __call__(self, traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> np.ndarray:
         return np.stack(
             [
-                fc(traces, candidates).astype(np.float32)
+                fc(traces, candidates).astype(np.float32).ravel()
                 for fc in self.feature_calculators
             ],
-            axis=2,
+            axis=1,
         )
 
 
@@ -251,12 +251,30 @@ def make_scorer_ds(
     return features, targets
 
 
+class ExpSampler:
+    def __init__(self, lam: float, return_index: bool = True):
+        self.lam = lam
+        self.return_index = return_index
+
+    def __call__(self, options: list):
+        index = int(random.expovariate(self.lam)) % len(options)
+        if self.return_index:
+            return index
+        return options[index]
+
+
+def _find_candidate_index(word: str, candidates: list[utils.Candidate]) -> int:
+    for i, c in enumerate(candidates):
+        if c.word == word:
+            return i
+
+
 def make_ranking_ds(
         original_dataset: Iterable[utils.Sample],
         candidate_generator: Callable[[list[utils.Trace]], list[list[utils.Candidate]]],
         features_extractor: FeaturesExtractorNP,
         keyboard_grids: dict[str, utils.KeyboardGrid],
-        sampler: Callable[[list[utils.Candidate]], utils.Candidate] = random.choice,
+        sampler: ExpSampler = random.choice,
         negatives_per_track: int = 5,
         batch_size: int = 100,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -264,24 +282,46 @@ def make_ranking_ds(
     rows_per_track = 1 + negatives_per_track
     labels_pattern = np.zeros(rows_per_track, np.int32)
     labels_pattern[0] = 1
+    batch_start_index = 0
     for i, batch in enumerate(utils.batch_iterable(original_dataset, batch_size)):
         candidates = candidate_generator([dp.trace for dp in batch])
-        negative_candidates = [[sampler(cs) for _ in range(negatives_per_track)] for cs in candidates]
+        good_indices = [
+            i
+            for i, (s, cs) in enumerate(zip(batch, candidates))
+            if any(s.word == c.word for c in cs)
+        ]
+        candidates = [candidates[i] for i in good_indices]
+        batch = [batch[i] for i in good_indices]
+
+        negative_ranks = [[sampler(cs) for _ in range(negatives_per_track)] for cs in candidates]
+        negative_candidates = [
+            [cs[i] for i in nis]
+            for cs, nis in zip(candidates, negative_ranks)
+        ]
         positive_candidates = [
             utils.Candidate(dp.word, keyboard_grids[dp.trace.grid_name].make_curve(dp.word))
             for dp in batch
         ]
+        positive_ranks = [
+            _find_candidate_index(dp.word, cs)
+            for dp, cs in zip(batch, candidates)
+        ]
+        ranks = list(itertools.chain.from_iterable([pr, *nrs] for pr, nrs in zip(positive_ranks, negative_ranks)))
 
         selected_candidates = [[pc, *ncs] for pc, ncs in zip(positive_candidates, negative_candidates)]
         batch_features = features_extractor([dp.trace for dp in batch], selected_candidates)
-        features.append(batch_features.reshape(
-            (batch_features.shape[0] * batch_features.shape[1], batch_features.shape[2])
+        features.append(np.concatenate(
+            (
+                batch_features,
+                np.array(ranks).reshape((-1, 1)),
+            ),
+            axis=1,
         ))
 
         for j in range(len(batch)):
             labels.append(labels_pattern)
-            groups.append(np.full(rows_per_track, i * batch_size + j))
-            true_row_index = (i * batch_size + j) * rows_per_track
+            true_row_index = batch_start_index + j * rows_per_track
+            groups.append(np.full(rows_per_track, true_row_index))
             pairs.append(np.stack(
                 (
                     np.full(negatives_per_track, true_row_index),
@@ -289,17 +329,9 @@ def make_ranking_ds(
                 ),
                 axis=1,
             ))
+        batch_start_index += len(batch) * rows_per_track
     features = np.concatenate(features)
     labels = np.concatenate(labels)
     groups = np.concatenate(groups)
     pairs = np.concatenate(pairs)
     return features, labels, groups, pairs
-
-
-class ExpSampler:
-    def __init__(self, lam: float):
-        self.lam = lam
-
-    def __call__(self, options: list):
-        index = int(random.expovariate(self.lam)) % len(options)
-        return options[index]
