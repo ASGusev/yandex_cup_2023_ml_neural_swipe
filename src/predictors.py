@@ -267,6 +267,7 @@ def _find_candidate_index(word: str, candidates: list[utils.Candidate]) -> int:
     for i, c in enumerate(candidates):
         if c.word == word:
             return i
+    return -1
 
 
 def make_ranking_ds(
@@ -335,3 +336,86 @@ def make_ranking_ds(
     groups = np.concatenate(groups)
     pairs = np.concatenate(pairs)
     return features, labels, groups, pairs
+
+
+def make_pairs_ds(
+        original_dataset: Iterable[utils.Sample],
+        candidate_generator: Callable[[list[utils.Trace]], list[list[utils.Candidate]]],
+        trace_features_extractor: FeaturesExtractorNP,
+        candidate_features_extractor: FeaturesExtractorNP,
+        sampler: ExpSampler = random.choice,
+        negatives_per_track: int = 10,
+        batch_size: int = 1000,
+) -> tuple[np.ndarray, np.ndarray]:
+    features, labels = [], []
+    rows_per_track = 1 + negatives_per_track
+    for i, batch in enumerate(utils.batch_iterable(original_dataset, batch_size)):
+        batch_candidates = candidate_generator([dp.trace for dp in batch])
+        chosen_traces, chosen_candidates, chosen_ranks = [], [], []
+        for sample, candidates in zip(batch, batch_candidates):
+            good_rank = _find_candidate_index(sample.word, candidates)
+            if good_rank == -1:
+                continue
+            negative_ranks = [sampler(candidates) for _ in range(negatives_per_track)]
+            ranks = [good_rank, *negative_ranks]
+            chosen_traces.append(sample.trace)
+            chosen_candidates.append([candidates[r] for r in ranks])
+            chosen_ranks.append(ranks)
+
+        trace_features = trace_features_extractor(chosen_traces, chosen_candidates)
+        candidate_features = candidate_features_extractor(chosen_traces, chosen_candidates)
+        chosen_ranks = np.array(chosen_ranks).reshape((-1, 1))
+        candidate_features = np.concatenate((candidate_features, chosen_ranks), axis=1)
+        for pos_index in range(0, len(trace_features), rows_per_track):
+            for neg_index in range(pos_index + 1, pos_index + rows_per_track):
+                tgt_features = trace_features[pos_index]
+                pos_features = candidate_features[pos_index]
+                neg_features = candidate_features[neg_index]
+                features.append(np.block([[tgt_features, pos_features, neg_features],
+                                          [tgt_features, neg_features, pos_features]]))
+                labels.append(np.array([1, 0]))
+
+    features = np.concatenate(features)
+    labels = np.concatenate(labels)
+    return features, labels
+
+
+class PairwiseRanker:
+    def __init__(
+            self,
+            scorer: Callable,
+            trace_feature_extractor: FeaturesExtractor,
+            candidates_feature_extractor: FeaturesExtractor
+    ):
+        self.scorer = scorer
+        self.trace_feature_extractor = trace_feature_extractor
+        self.candidates_feature_extractor = candidates_feature_extractor
+
+    def __call__(self, sample_traces: list[utils.Trace], candidates: list[list[utils.Candidate]]) -> list[utils.Suggestion]:
+        trace_features = self.trace_feature_extractor(sample_traces, candidates)
+        candidates_features = self.candidates_feature_extractor(sample_traces, candidates)
+        candidates_per_trace = len(candidates[0])
+        res_indexes = [(0,) for _ in sample_traces]
+        for ci in range(1, candidates_per_trace):
+            features = np.stack([
+                np.concatenate((
+                    trace_features[i * candidates_per_trace],
+                    candidates_features[i * candidates_per_trace + ri],
+                    [ri],
+                    candidates_features[i * candidates_per_trace + ci],
+                    [ci],
+                ))
+                for i, (ris, cs) in enumerate(zip(res_indexes, candidates))
+                for ri in ris
+            ])
+            res = self.scorer(features)
+            res = res.reshape((len(sample_traces), -1))
+            new_indexes = res.sum(axis=1)
+            res_indexes = [
+                (*ris[:ni], ci, *ris[ni:])[:4]
+                for ris, ni in zip(res_indexes, new_indexes)
+            ]
+        return [
+            tuple(cs[i].word for i in ris)
+            for cs, ris in zip(candidates, res_indexes)
+        ]
