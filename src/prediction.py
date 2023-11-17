@@ -256,7 +256,7 @@ class ExpSampler:
         self.lam = lam
         self.return_index = return_index
 
-    def __call__(self, options: list):
+    def __call__(self, options: list[utils.Candidate]) -> int | utils.Candidate:
         index = int(random.expovariate(self.lam)) % len(options)
         if self.return_index:
             return index
